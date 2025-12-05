@@ -1,7 +1,7 @@
 /*
- * Trial Division Attack on RSA
- * Usage: ./trial_division <n> [e]
- *        ./trial_division --demo
+ * Pollard's Rho Attack on RSA
+ * Usage: ./pollards_rho <n> [e]
+ *        ./pollards_rho --demo
  */
 
 #include <stdio.h>
@@ -44,7 +44,21 @@ int64_t mod_inverse(int64_t e, int64_t phi)
     return t;
 }
 
-uint64_t trial_division(uint64_t n, uint64_t *iterations)
+// f(x) = x^2 + 1 mod n
+uint64_t f(uint64_t x, uint64_t n)
+{
+    return ((__uint128_t)x * x + 1) % n;
+}
+
+/*
+ * Pollard's Rho Factorization
+ * 
+ * Uses cycle detection (Floyd's tortoise and hare) to find a factor.
+ * Based on the birthday paradox - expects to find a collision in O(n^1/4) steps.
+ * 
+ * Much faster than trial division for large numbers with similar-sized factors.
+ */
+uint64_t pollards_rho(uint64_t n, uint64_t *iterations)
 {
     *iterations = 0;
     
@@ -54,37 +68,29 @@ uint64_t trial_division(uint64_t n, uint64_t *iterations)
         return 2;
     }
     
-    uint64_t limit = (uint64_t)sqrt((double)n) + 1;
-    for (uint64_t i = 3; i <= limit; i += 2)
+    uint64_t x = 2, y = 2, d = 1;
+    
+    while (d == 1)
     {
         (*iterations)++;
-        if (n % i == 0)
-            return i;
+        x = f(x, n);           // tortoise: one step
+        y = f(f(y, n), n);     // hare: two steps
+        
+        uint64_t diff = (x > y) ? x - y : y - x;
+        d = gcd(diff, n);
+        
+        // Prevent infinite loop
+        if (*iterations > 10000000)
+            return 0;
     }
-    return n;
-}
-
-int is_prime(uint64_t n)
-{
-    if (n < 2) return 0;
-    if (n == 2) return 1;
-    if (n % 2 == 0) return 0;
-    for (uint64_t i = 3; i * i <= n; i += 2)
-        if (n % i == 0) return 0;
-    return 1;
-}
-
-uint64_t next_prime(uint64_t n)
-{
-    while (!is_prime(n))
-        n++;
-    return n;
+    
+    return (d != n) ? d : 0;
 }
 
 void run_demo()
 {
-    printf("Trial Division Scaling Demo\n");
-    printf("============================\n\n");
+    printf("Pollard's Rho Scaling Demo\n");
+    printf("===========================\n\n");
     printf("%-10s %15s %12s %15s\n", "Bits", "Iterations", "Time", "Est. 1024-bit");
     printf("--------------------------------------------------------------\n");
     
@@ -101,45 +107,47 @@ void run_demo()
     };
     int num_tests = sizeof(tests) / sizeof(tests[0]);
     
-    double last_time = 0;
-    
     for (int i = 0; i < num_tests; i++)
     {
         clock_t start = clock();
         uint64_t iterations;
-        uint64_t p = trial_division(tests[i].n, &iterations);
+        uint64_t p = pollards_rho(tests[i].n, &iterations);
         clock_t end = clock();
         double time_spent = (double)(end - start) / CLOCKS_PER_SEC;
         
-        // Estimate time for 1024-bit primes (2048-bit n)
-        // Each bit doubles iterations, so 2^(1024 - bits) times slower
+        // Pollard's rho is O(n^1/4), so for 1024-bit primes:
+        // Time scales as 2^((1024-bits)/4)
         int bits_remaining = 1024 - tests[i].bits;
-        double est_seconds = time_spent * pow(2, bits_remaining);
+        double est_seconds = time_spent * pow(2, bits_remaining / 4.0);
         
-        // Convert to years with all zeros
         double years = est_seconds / (365.25 * 24 * 3600);
         int exponent = (years > 0) ? (int)floor(log10(years)) : 0;
         
-        printf("%-10d %15" PRIu64 " %10.4fs       ", tests[i].bits, iterations, time_spent);
-        
-        if (years < 1)
-            printf("%.2f sec\n", est_seconds);
-        else if (exponent < 10)
-            printf("%.0f years\n", years);
+        if (p == 0)
+        {
+            printf("%-10d %15s %10.4fs       -\n", tests[i].bits, "FAILED", time_spent);
+        }
         else
         {
-            printf("1");
-            for (int z = 0; z < exponent; z++)
-                printf("0");
-            printf(" years\n");
+            printf("%-10d %15" PRIu64 " %10.4fs       ", tests[i].bits, iterations, time_spent);
+            
+            if (years < 1)
+                printf("%.2f sec\n", est_seconds);
+            else if (exponent < 10)
+                printf("%.0f years\n", years);
+            else
+            {
+                printf("1");
+                for (int z = 0; z < exponent; z++)
+                    printf("0");
+                printf(" years\n");
+            }
         }
-        
-        last_time = time_spent;
     }
     
     printf("\n");
-    printf("Note: Real RSA uses 1024-bit primes (2048-bit n)\n");
-    printf("Trial division is completely infeasible at that scale.\n");
+    printf("Pollard's Rho complexity: O(n^1/4) vs Trial Division O(n^1/2)\n");
+    printf("Much faster, but still infeasible for 1024-bit primes.\n");
     printf("\nUniverse age: ~13.8 billion years\n");
 }
 
@@ -167,18 +175,18 @@ int main(int argc, char *argv[])
         return 1;
     }
     
-    printf("Trial Division Attack\n");
+    printf("Pollard's Rho Attack\n");
     printf("n = %" PRIu64 ", e = %" PRIu64 "\n\n", n, e);
     
     clock_t start = clock();
     uint64_t iterations;
-    uint64_t p = trial_division(n, &iterations);
+    uint64_t p = pollards_rho(n, &iterations);
     clock_t end = clock();
     double time_spent = (double)(end - start) / CLOCKS_PER_SEC;
     
-    if (p == n)
+    if (p == 0)
     {
-        printf("Failed: n is prime\n");
+        printf("Failed to factor\n");
         return 1;
     }
     
